@@ -1,9 +1,12 @@
+
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
 #include <sstream>
 #include <cstdlib>
+#include <unistd.h>
+#include <sys/wait.h>
 
 using namespace std;
 
@@ -44,6 +47,37 @@ void handle_env(string input) {
     }
 }
 
+void handle_external_command(string input) {
+    pid_t pid = fork();
+    
+    if (pid == 0) {
+        vector<string> args;
+        stringstream ss(input);
+        string token;
+        
+        while (ss >> token) {
+            args.push_back(token);
+        }
+        
+        vector<char*> argv;
+        for (auto& arg : args) {
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        }
+        argv.push_back(nullptr);
+        
+        execvp(argv[0], argv.data());
+        
+        cout << input << ": command not found\n";
+        exit(1);
+        
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+    } else {
+        cerr << "Failed to create process" << '\n';
+    }
+}
+
 int main() {
     string hist = "kubsh_history.txt";
     ofstream F(hist, ios::app);
@@ -68,11 +102,10 @@ int main() {
         } else if (input.find("\\e") == 0) {
             handle_env(input);
         } else {
-            cout << "Unknown command: " << input << '\n';
+            handle_external_command(input);
         }
 
         cerr << "$ ";
     }
     return 0;
 }
-

@@ -1,14 +1,28 @@
-
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
 #include <sstream>
-#include <cstdlib>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <csignal>
+#include <cstring>
 
 using namespace std;
+
+volatile sig_atomic_t got_sighup = 0;
+
+void sighup_handler(int sig) {
+    got_sighup = 1; 
+}
+
+void setup_signal_handler() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sighup_handler;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGHUP, &sa, NULL);
+}
 
 void handle_debug(string input) {
     input = input.substr(5);
@@ -79,6 +93,8 @@ void handle_external_command(string input) {
 }
 
 int main() {
+    setup_signal_handler();
+
     string hist = "kubsh_history.txt";
     ofstream F(hist, ios::app);
 
@@ -86,6 +102,13 @@ int main() {
 
     string input;
     while (getline(cin, input)) {
+        if (got_sighup) {
+            cout << "Configuration reloaded" << endl; 
+            got_sighup = 0;
+            cerr << "$ ";
+            continue;
+        }
+        
         F << '$' << input << '\n';  
         F.flush(); 
         

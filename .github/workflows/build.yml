@@ -1,20 +1,44 @@
-name: Build
+name: Run tests & upload artifact
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install deps
-      run: sudo apt install -y g++ fuse3 libfuse3-dev
-    
-    - name: Compile
-      run: g++ -std=c++17 -O2 *.cpp -o shell -lfuse3 -lpthread
-    
-    - name: Test
+    - name: Checkout current repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Pull builder image
+      run: docker pull vlashex/kubsh-builder:latest
+
+    - name: Build, install and test (using same container as locally)
       run: |
-        [ -f "shell" ] && echo "✅ Success" || (echo "❌ Fail" && exit 1)
+        docker run --rm --privileged \
+        -v "$PWD:/mnt" \
+        vlashex/kubsh-builder:latest
+
+    - name: Verify kubsh.deb exists
+      run: |
+        if [ ! -f "kubsh.deb" ]; then
+          echo "❌ kubsh.deb not found!"
+          ls -la
+          exit 1
+        fi
+        echo "✅ kubsh.deb found"
+        ls -la kubsh.deb
+
+    - name: Upload kubsh.deb artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: kubsh-package
+        path: kubsh.deb
+        retention-days: 30

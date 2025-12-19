@@ -1,58 +1,55 @@
-# Компилятор и флаги
 CXX := g++
 CXXFLAGS := -O2 -std=c++17 -D_FILE_OFFSET_BITS=64 -DFUSE_USE_VERSION=35
-LDFLAGS := -lfuse3 -pthread
+LDFLAGS := -static -lfuse3 -pthread -ldl
 
-# Имя программы
 TARGET := kubsh
-
-# Исходные файлы
 SOURCES := main.cpp vfs.cpp
 
-# Настройки пакета
 PACKAGE_NAME := $(TARGET)
 VERSION := 1.0
 ARCH := amd64
 DEB_FILENAME := kubsh.deb
 
-# Временные директории
 BUILD_DIR := deb_build
 INSTALL_DIR := $(BUILD_DIR)/usr/local/bin
 
-# Docker
-DOCKER_IMAGE := kubsh-local
-TEST_CONTAINER := kubsh-test-$(shell date +%s)
-
-.PHONY: all clean deb run
+.PHONY: all clean deb-static install-deps
 
 all: $(TARGET)
 
+install-deps:
+  apt-get update
+  apt-get install -y g++ make libfuse3-dev fuse3 pkg-config
+
 $(TARGET): $(SOURCES)
-	$(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LDFLAGS)
+  $(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LDFLAGS)
 
 deb: $(TARGET) | $(BUILD_DIR) $(INSTALL_DIR)
-	# Копируем бинарник
-	cp $(TARGET) $(INSTALL_DIR)/
-	
-	# Создаем базовую структуру пакета
-	mkdir -p $(BUILD_DIR)/DEBIAN
-	
-	# Генерируем контрольный файл
-	@echo "Package: $(PACKAGE_NAME)" > $(BUILD_DIR)/DEBIAN/control
-	@echo "Version: $(VERSION)" >> $(BUILD_DIR)/DEBIAN/control
-	@echo "Architecture: $(ARCH)" >> $(BUILD_DIR)/DEBIAN/control
-	@echo "Maintainer: $(USER)" >> $(BUILD_DIR)/DEBIAN/control
-	@echo "Description: Simple shell with VFS using FUSE3" >> $(BUILD_DIR)/DEBIAN/control
-	@echo "Depends: fuse3" >> $(BUILD_DIR)/DEBIAN/control
-	
-	# Собираем пакет с фиксированным именем
-	dpkg-deb --build $(BUILD_DIR) $(DEB_FILENAME)
+  cp $(TARGET) $(INSTALL_DIR)/
+  
+  # Проверяем, что бинарник действительно статический
+  @echo "Checking if binary is static..."
+  @if file $(TARGET) | grep -q "statically linked"; then \
+    echo "✓ Binary is statically linked"; \
+  else \
+    echo "✗ Binary is NOT statically linked!"; \
+    exit 1; \
+  fi
+
+  mkdir -p $(BUILD_DIR)/DEBIAN
+
+  @echo "Package: $(PACKAGE_NAME)" > $(BUILD_DIR)/DEBIAN/control
+  @echo "Version: $(VERSION)" >> $(BUILD_DIR)/DEBIAN/control
+  @echo "Architecture: $(ARCH)" >> $(BUILD_DIR)/DEBIAN/control
+  @echo "Maintainer: $(USER)" >> $(BUILD_DIR)/DEBIAN/control
+  @echo "Description: Simple shell with VFS using FUSE3 (statically linked)" >> $(BUILD_DIR)/DEBIAN/control
+  @echo "Depends:" >> $(BUILD_DIR)/DEBIAN/control  # Обратите внимание на двоеточие и пустую строку после
+  @echo "" >> $(BUILD_DIR)/DEBIAN/control  # Добавляем пустую строку в конце
+
+  dpkg-deb --build $(BUILD_DIR) $(DEB_FILENAME)
 
 $(BUILD_DIR) $(INSTALL_DIR):
-	mkdir -p $@
+  mkdir -p $@
 
 clean:
-	rm -rf $(TARGET) $(BUILD_DIR) $(DEB_FILENAME)
-
-run: $(TARGET)
-	./$(TARGET)
+  rm -rf $(TARGET) $(BUILD_DIR) kubsh.deb kubsh.deb

@@ -23,34 +23,69 @@ INSTALL_DIR := $(BUILD_DIR)/usr/local/bin
 DOCKER_IMAGE := kubsh-local
 TEST_CONTAINER := kubsh-test-$(shell date +%s)
 
-# Проверка зависимостей
-DEPS := fuse3 libfuse3-dev g++ make
-CHECK_DEPS := $(shell dpkg -s $(DEPS) >/dev/null 2>&1 || echo "deps_missing")
+# Проверка - находимся ли мы в Docker контейнере
+IN_DOCKER := $(shell grep -c docker /proc/self/cgroup 2>/dev/null || echo "0")
+IS_ROOT := $(shell id -u)
+
+# Зависимости для разных сред
+DEPS_UBUNTU := fuse3 libfuse3-dev g++ make
+DEPS_ALPINE := fuse3 fuse3-dev g++ make
+DEPS_FEDORA := fuse3 fuse3-devel gcc-c++ make
 
 .PHONY: all clean deb run deps install-deps docker-build docker-test docker-clean
 
 all: deps $(TARGET)
 
-# Проверка и установка зависимостей
+# Умная проверка зависимостей - разная для Docker и хоста
 deps:
-ifeq ($(CHECK_DEPS),deps_missing)
-	@echo "Устанавливаю зависимости..."
-	@sudo apt-get update
-	@sudo apt-get install -y $(DEPS)
-	@echo "Зависимости установлены!"
+ifeq ($(IN_DOCKER),0)
+	# Мы НЕ в Docker - проверяем как обычно
+	@echo "Проверяю зависимости на хосте..."
+	@if ! dpkg -s $(DEPS_UBUNTU) >/dev/null 2>&1; then \
+		echo "Устанавливаю зависимости..."; \
+		sudo apt-get update && sudo apt-get install -y $(DEPS_UBUNTU); \
+	else \
+		echo "Все зависимости установлены ✓"; \
+	fi
 else
-	@echo "Все зависимости установлены ✓"
+	# Мы В Docker - устанавливаем без sudo
+	@echo "Проверяю зависимости в Docker..."
+	@if ! dpkg -s $(DEPS_UBUNTU) >/dev/null 2>&1; then \
+		echo "Устанавливаю зависимости в Docker..."; \
+		apt-get update && apt-get install -y $(DEPS_UBUNTU); \
+	else \
+		echo "Все зависимости установлены в Docker ✓"; \
+	fi
 endif
 
+# Альтернативная установка зависимостей
 install-deps:
-	@sudo apt-get update
-	@sudo apt-get install -y $(DEPS)
+ifeq ($(IN_DOCKER),0)
+	@echo "Устанавливаю зависимости на хосте (с sudo)..."
+	sudo apt-get update
+	sudo apt-get install -y $(DEPS_UBUNTU)
+else
+	@echo "Устанавливаю зависимости в Docker (без sudo)..."
+	apt-get update
+	apt-get install -y $(DEPS_UBUNTU)
+endif
 
-# Основные цели
-$(TARGET): $(SOURCES) deps
+# Проверка зависимостей без установки
+check-deps:
+	@echo "Проверка зависимостей..."
+	@for dep in $(DEPS_UBUNTU); do \
+		if dpkg -s $$dep >/dev/null 2>&1; then \
+			echo "✅ $$dep"; \
+		else \
+			echo "❌ $$dep (отсутствует)"; \
+		fi \
+	done
+
+# Основная цель сборки
+$(TARGET): $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $@ $(SOURCES) $(LDFLAGS)
 
-deb: deps $(TARGET) | $(BUILD_DIR) $(INSTALL_DIR)
+deb: $(TARGET) | $(BUILD_DIR) $(INSTALL_DIR)
 	# Копируем бинарник
 	cp $(TARGET) $(INSTALL_DIR)/
 	
@@ -77,7 +112,7 @@ clean:
 run: $(TARGET)
 	./$(TARGET)
 
-# Docker цели (без изменений)
+# Docker цели - ОСОБЫЕ ПРАВИЛА ДЛЯ DOCKER
 docker-build: deb
 	@echo "Building Docker image..."
 	docker build -t $(DOCKER_IMAGE) -f Dockerfile.test .
@@ -88,8 +123,13 @@ docker-test: docker-build
 		-v /dev:/dev:ro \
 		--name $(TEST_CONTAINER) \
 		$(DOCKER_IMAGE) \
-		/bin/bash -c "/test/test_kubsh.sh"
+		/bin/bash -c "cd /test && make -f /test/Makefile.docker test"
 
 docker-clean:
 	-docker rmi $(DOCKER_IMAGE) 2>/dev/null || true
 	-docker container prune -f
+
+# Цель для быстрой сборки в Docker
+docker-quick:
+	docker run --rm -v $(PWD):/build -w /build ubuntu:22.04 \
+		bash -c "apt-get update && apt-get install -y g++ make && make"
